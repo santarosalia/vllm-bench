@@ -16,10 +16,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -114,6 +116,27 @@ def check_server(base_url: str, model: str) -> None:
     if model_ids and model not in model_ids:
         joined = ", ".join(str(item) for item in model_ids)
         print(f"안내: 요청 모델이 서버 목록에 없습니다. 서버 모델: {joined}")
+
+
+def base_url_prefix(base_url: str) -> str:
+    parsed = urllib.parse.urlparse(base_url if "://" in base_url else f"http://{base_url}")
+    host = parsed.hostname or "server"
+    if parsed.port:
+        host = f"{host}-{parsed.port}"
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", host).strip("-")
+    return slug or "server"
+
+
+def prefix_result_path(path: Path, prefix: str) -> Path:
+    if path.name.startswith(f"{prefix}-"):
+        return path
+    target = path.with_name(f"{prefix}-{path.name}")
+    index = 2
+    while target.exists():
+        target = path.with_name(f"{prefix}-{path.stem}-{index}{path.suffix}")
+        index += 1
+    path.rename(target)
+    return target
 
 
 def result_files() -> list[Path]:
@@ -316,8 +339,14 @@ def cmd_run(args: argparse.Namespace) -> None:
             log_file.write(line)
     code = process.wait()
 
-    created = [path for path in result_files() if path.resolve() not in before]
-    saved = created[-1] if created else (result_files()[-1] if result_files() else None)
+    prefix = base_url_prefix(args.base_url)
+    created = [
+        prefix_result_path(path, prefix)
+        for path in result_files()
+        if path.resolve() not in before
+    ]
+    primary = [path for path in created if not path.name.endswith(".pytorch.json")]
+    saved = primary[-1] if primary else (created[-1] if created else None)
     if saved is not None:
         saved_log = saved.with_suffix(".log")
         saved_log.write_text(log_path.read_text(encoding="utf-8"), encoding="utf-8")
